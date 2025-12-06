@@ -1,0 +1,842 @@
+\documentclass[12pt]{article}
+\usepackage{setspace}
+\setstretch{1.0} 
+\usepackage{booktabs}  
+\usepackage{dcolumn} 
+\usepackage{threeparttable}
+\usepackage{array}
+\usepackage{caption}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{longtable}  
+\usepackage{graphicx}
+\usepackage{natbib}
+\usepackage{pgffor}
+\usepackage{float}
+\usepackage{indentfirst}
+\usepackage{hyperref}
+\usepackage{url}
+\graphicspath{{C:/tex/abalone/}} 
+\captionsetup{skip=3pt}
+\setlength{\abovecaptionskip}{2pt}
+\setlength{\belowcaptionskip}{2pt}
+\setlength{\tabcolsep}{4pt} 
+\renewcommand{\arraystretch}{0.7}
+\setlength{\belowrulesep}{0pt}
+\setlength{\aboverulesep}{0pt}
+\geometry{margin=1in}
+
+\title{Abalone Age Prediction Project}
+\author{
+	Ruitian Liu \\
+	\href{mailto:rttliu@ucdavis.edu}{rttliu@ucdavis.edu}
+}
+\date{\today}
+
+\begin{document}
+	\maketitle
+	\begin{abstract}
+		This project focuses on how to build an accurate and interpretable model for predicting abalone age using the UCI Abalone dataset. 
+		To improve our model performance, we apply Box–Cox, log, and square-root transformations, along with selected interaction terms, removing influential observations. These successive refinements from \texttt{fit1} to \texttt{fit6} progressively improve the models, leading to strong fitting and predictive performance for the more complex specifications \texttt{fit6} and \texttt{fit7}. However, these high-dimensional models exhibit poor robustness. By applying LASSO-based variable selection, the reduced model \texttt{fit8} achieves a better balance between robustness and performance. We explore a trade-off between accuracy and interpretability, and between robustness and model complexity: complex models may be sensitive to outliers, whereas the reduced model remains more stable and generalizable, even though it sacrifices some predictive accuracy.
+	\end{abstract}
+	
+	\section*{Introduction}
+	
+	\paragraph{Data and relevant background.} Rings of abalones determine its age. But the ring count in abalone is not like tree rings that can be seen from the outside, nor can it be observed simply by inspecting the shell surface. The true growth rings are located inside the shell’s cross-section and can only be seen by cutting or otherwise damaging the abalone. To make age estimation more efficient, we use a dataset of 4,177 abalones with nine features, including sex, length, diameter, height, and several physical other characteristics, and develop statistical models to deal with this. The dataset is available from the UCI Machine Learning Repository \citep{uci_abalone}.The specific information of our dataset is shown in Table~\ref{tab:data_exploration}.
+	
+	
+	\paragraph{The motivation of the project.} Firstly, the traditional procedure for measuring ring counts is labor-intensive and destructive. The shell must be cut or ground into thin sections, then boiled, cleaned, polished, and examined under a microscope, counting the rings manually \citep{nash1994abalone, day1992abalone}. However, predicting abalone's age by building up a statistical models by using abalone's physical features provides scientists a non-destructive way of age estimation, without cutting or damaging the animal. This makes age assessment faster and cheaper. Developing a non-destructive, measurement-based method for age estimation can greatly improve efficiency and reduce cost in biological surveys \citep{NOAA2020agegrowth}.
+	
+	\paragraph{Research questions} Our analysis focuses on several methodological issues essential for building reliable predictive models: (1) How are our variables transformed to achieve a linear relationship and ensure that the residuals are normally distributed with a mean of zero? (2) How does the model’s performance change after removing outliers, and what methods can be used to identify them? (3) Although adding interaction terms may improve model performance, it can also increase the risks of multicollinearity and overfitting. Is it still necessary to include such terms, and if so, how can these issues be mitigated? (4) Among all fitted models, which provides the best interpretability, which displays the greatest robustness, which achieves the strongest overall fit, and which performs best in prediction?
+	
+	\section*{Methods and Results}
+	\paragraph{Exploratory data analysis (EDA).}
+	Tables~\ref{tab:EDA}–\ref{tab:EDA_cat} show that the dataset has one categorical variable and no missing values. Numerous outliers are detected using the \texttt{dlookr} implementation of Tukey’s rule \citep{tukey1977exploratory}, indicating strong skewness in several continuous variables, which is also evident in the boxplots (Figure~\ref{fig:1}).
+	 Both the tables and the plots reveal two extreme height values and two zero-height cases, which are removed (Tables~\ref{tab:height_zero}, \ref{tab:outliers}). The response variable is strongly left-skewed (Figure~\ref{fig:2}), suggesting the need for a Box–Cox transformation before fitting regression models.
+	
+	The \texttt{ggpairs()} (which developed from \texttt{GGally} package) visualization (Figure~\ref{fig:3}) and the Pearson heatmap (Figure~\ref{fig:4}) show strong correlations among all physical traits, implying multicollinearity between predictors. The scatterplots also display curved relationships, motivating log or square-root transformations for several predictors. In addition, male and female abalones share nearly identical size distributions, whereas infants are substantially smaller; thus, these two adult categories are combined for modeling. 
+	
+	Figures~\ref{fig:5} and \ref{fig:6} also reveal a pattern that the number of rings increases as the body size increases. However, this trend dies down for older abalones. For example, the distributions in body measure for the groups with 10–12 rings and 12–29 rings substantially overlap. This pattern suggests a diminishing marginal effect of body size on ring counts: beyond a certain size, additional growth in length or weight is less informative about age. This motivates the use of log or $\sqrt{\cdot}$ transformations for the predictors to better capture the nonlinear relationships with the response.
+	
+	
+	\paragraph{Benchmarks of assessing model performance in training set.}
+   To make information criteria comparable across models that are fitted on slightly different effective sample sizes after removing influential points, we use the normalized criteria $AIC/n$, $BIC/n$ and average log-likelihood, which can be interpreted as the per--observation contribution to the information loss~\citep{Hilbe2014},  \citep{Cronin1998} and \citep{Feknssa2023}. We also use $MSPE$ as a proxy for out-of-sample prediction error, together with the training $MSE$. $MSPE - MSE_{training}$ denote the \textbf{generalization gap}, which captures the extent of overfitting \citep{vapnik1998statistical}. A small gap implies stable generalization and more robust model, while a large gap suggests model sensitivity to noise or excessive complexity. The whole assessment benchmarks of accessing 
+	
+	\paragraph{Introduction of the utilized model.} 
+	As a starting point, we construct a sequence of regression models for predicting abalone age from observable physical measurements as
+	summarized in Table~\ref{tab:model_development}. In the following subsections, we will describe
+	these models in detail.
+	
+	\begin{table}[h!]
+		\centering
+		\caption{Summary of Model Development (\texttt{fit1}--\texttt{fit8})}
+		\label{tab:model_development}
+		\begin{tabular}{ll}
+			\hline
+			\textbf{Model} & \textbf{Main Features / Adjustments} \\
+			\hline
+			\texttt{fit1} & Baseline linear regression on raw \texttt{rings} without transformation. \\
+			\texttt{fit2} & Applied Box--Cox transformation and fitted log(\texttt{rings}) model. \\
+			\texttt{fit3} & Removed influential points identified by Cook’s distance, leverage, and residuals. \\
+			\texttt{fit4} & Added log/sqrt predictor transformations and used bidirectional stepwise selection. \\
+			\texttt{fit5} & Refit after removing additional influential points for improved model stability. \\
+			\texttt{fit6} & Introduced two-way interaction terms with stepwise selection.\\
+			\texttt{fit7} & Refit with two-way interactions after excluding new influential observations.\\
+			\texttt{fit8} & Final reduced model guided by LASSO feature selection.\\
+			\hline
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[H]
+		\centering
+		\caption{Model Comparison in Training Sets (Internal Validation)}
+		\label{tab:model comparison}
+		\begin{tabular}{lrrrrrr}
+			\toprule
+			Model & Avg Log-Likelihood & AIC / n & BIC / n & MSPE & Train MSE & Gap \\
+			\midrule
+			\texttt{fit2} & 0.1829 & -0.3597 & -0.3414 & 0.040892 & 0.040616 & 0.000276 \\
+			\texttt{fit3} & 0.2205 & -0.4350 & -0.4166 & 0.037912 & 0.037670 & 0.000242 \\
+			\texttt{fit4} & 0.2828 & -0.5559 & -0.5265 & 0.033658 & 0.033258 & 0.000400 \\
+			\texttt{fit5} & 0.3040 & -0.6007 & -0.5785 & 0.032121 & 0.031878 & 0.000242 \\
+			\texttt{fit6} & 0.3197 & -0.6266 & -0.5878 & 0.031341 & 0.030892 & 0.000449 \\
+			\texttt{fit7} & \textbf{0.3402} & \textbf{-0.6603} & \textbf{-0.5989} & \textbf{0.030303} & \textbf{0.029649} & 0.000654 \\
+			\texttt{fit8} & 0.2549 & -0.5044 & -0.4876 & 0.035360 & 0.035164 & \textbf{0.000196} \\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\paragraph{Data splitting and transformations: \texttt{fit1-fit2}.} Firstly, we split the data into training and test sets in a 0.8/0.2 proportion. To ensure the sampling procedure is stratified with respect to the response variable, the split is generated using the \texttt{createDataPartition()} function from the \texttt{caret} package. We then fit a baseline linear model (\texttt{fit1}) with \texttt{rings} as the response and all other variables as predictors, as shown in Table~\ref{tab:fit1}. All subsequent models are fitted exclusively on the training set.
+	
+	Although most coefficients in \texttt{fit1} are statistically significant, the residuals exhibit strong skewness, a nonzero mean, and clear deviations from linearity, indicating violations of model assumptions. These issues align with the substantial skewness of the response observed in the EDA. To address this, we apply a Box–Cox transformation; the profile likelihood (Figure~\ref{fig:8}) suggests $\lambda$ near zero, motivating a log transformation. We therefore refit the model using $\log(\texttt{rings})$, denoted as \texttt{fit2}, with results summarized in Table~\ref{tab:fit2}.
+	
+	\paragraph{Influential points removal: \texttt{fit2-fit3}.} 
+	Table~\ref{tab:fit2} reports the estimates for \texttt{fit2}. In the residual diagnostics (Figure~\ref{fig:9}), the mean of the residuals moves closer to zero and their distribution appears more normal. However, nonlinear trends between residuals and fitted values remain, and several observations have absolute studentized residuals exceeding 3, with clear deviations from the theoretical quantiles. To address these potential outliers, we classify an observation as influential if it satisfies any of the following criteria: (1) Cook’s distance $D_i > 0.02$, (2) studentized residual $|t_i| > 3$, or (3) leverage $h_i > 15p/n$. Because our sample size is large, standard leverage rules such as $2p/n$ or $3p/n$ would flag a substantial portion of the data, so a more conservative cutoff is adopted instead. As shown in Figure~\ref{fig:10}, several observations exceed at least one of these thresholds and are removed (Table~\ref{tab:remove_influential}). The refitted model is denoted \texttt{fit3}, with regression results summarized in Table~\ref{tab:fit3}.
+	
+	As summarized in Table~\ref{tab:model comparison}, \texttt{fit3} exhibits noticeably improved robustness, in-sample fit, and predictive performance relative to \texttt{fit2}. From Figure~\ref{fig:11}, we can see that the distributions of our residuals appears closer to normal. But there are still some linearity between residuals and fitted values. So we may consider to transform our predictors to seek further nonlinear relationships. 
+	
+	\paragraph{Predictors' nonlinear transformation: \texttt{fit3-fit5}.} In EDA, we discover a non-linear trend between response variable and predictors. So here we are going to explore nonlinear trends. As shown in Figure~\ref{fig:12}, the relationships between the predictors and \texttt{log(rings)} display clear curvature. To identify transformations that best restore linearity, we compare each predictor in its linear, log, and $\sqrt{\cdot}$ forms (Figure~\ref{fig:13}).Based on these LOESS trends, we construct a candidate model including linear, log, and $\sqrt{\cdot}$ versions of each variable, together with the sex indicator. Because this candidate set is still large, we apply stepwise selection using \texttt{stepAIC()} to remove predictors with limited contribution, yielding model \texttt{fit4}. Because this candidate set remains large, we apply stepwise selection using \texttt{stepAIC()} to remove predictors with limited contribution. The resulting model is denoted as \texttt{fit4}.
+	
+	Table~\ref{tab:fit4} shows that \texttt{fit4} retains a mixture of linear, log, and $\sqrt{\cdot}$ terms, particularly for weight and shell‐size variables. As seen in Table~\ref{tab:model comparison}, this model substantially improves both fitting and predictive accuracy, though with a slight reduction in robustness. The nonlinear pattern in the residuals is also greatly reduced, indicating better model adequacy. However, several influential observations remain (Figure~\ref{fig:15}; Table~\ref{tab:Influencial_Points4}). After removing these points, we refit the model as \texttt{fit5}. As shown again in Table~\ref{tab:model comparison}, both robustness and predictive performance improve further, although more moderately than in the transition from \texttt{fit3} to \texttt{fit4}. Residual normality is also enhanced, and several terms such as \texttt{log(diameter)} and \texttt{log(height)} drop out in \texttt{fit5}, yielding a simpler model.
+	
+	\paragraph{Inclusion of interaction terms: \texttt{fit5-fit7}.} We introduce pairwise interaction terms to capture effect modification among size-related predictors. Although adding interactions typically increases dimensionality and may exacerbate multicollinearity, these terms allow the model to represent more flexible relationships. To control model complexity, we apply stepwise selection and LASSO regularization to remove redundant interactions and retain only meaningful variables. (which would not be shown in this part but the next session).
+	
+	We use the \texttt{update()} function to augment \texttt{fit5} with all pairwise interactions and then apply stepwise selection via \texttt{stepAIC()} to obtain the interaction model \texttt{fit6} (Table~\ref{tab:model6}), with diagnostics and influential points shown in Figures~\ref{fig:17} and~\ref{fig:18}. As Table~\ref{tab:model comparison} indicates only modest improvements in fit and prediction, we remove the influential observations listed in Table~\ref{tab:ip} and refit the interaction model using the same procedure, yielding \texttt{fit7} (Table~\ref{tab:fit7}).
+	
+	A notable feature of \texttt{fit7} is its substantial increase in dimensionality: many interaction terms are retained, and most remain statistically significant despite strong collinearity among size-related predictors. The residuals also become nearly centered at zero (Figure~\ref{fig:19}), and both fitting and predictive performance improve (Table~\ref{tab:model comparison}). However, the generalization gap increases sharply from \texttt{fit5} to \texttt{fit7}, indicating greater sensitivity to training noise and reduced interpretability due to the model’s high dimensionality. This reflects the classical curse of dimensionality \citep{bellman1961adaptive}.
+	
+	\paragraph{Address of multicollinearity: \texttt{fit7-fit8}.} We apply LASSO to obtain a reduced interaction model from \texttt{fit7}, denoted \texttt{fit8}. The regularization parameter $\lambda$ is selected via 25-fold cross-validation using the minimum-error and one-standard-error rules \citep{hastie2009elements}; given the large number of predictors in \texttt{fit7}, we adopt the latter for a more parsimonious solution. The tuning path is shown in Figures~\ref{fig:20}–\ref{fig:21}, and the selected coefficients are listed in Table~\ref{tab:lasso}. Based on these results, we retain only interaction terms with relatively large effects while removing redundant structures (e.g., terms sharing the same predictor components).  Table~\ref{tab:fit8} shows the reduced interaction model.
+	
+	The final reduced interaction model \texttt{fit8} (Table~\ref{tab:fit8}) has very small standard errors for all retained predictors, indicating stronger statistical significance. The generalized VIF values in Table~\ref{tab:vif_fit8} (a benchmark that quantifies both categorical and continuous collinearity \citep{fox1992generalized}) are all below 3, suggesting that multicollinearity has been effectively controlled. Model diagnostics (Figure~\ref{fig:22}) show residuals with no systematic patterns and an approximately normal distribution centered at zero, and the added-variable plots (Figure~\ref{fig:23}) display linear partial relationships without notable outliers. These properties make \texttt{fit8} the most interpretable model in our sequence. Moreover, its generalization gap is substantially smaller than that of all other models (Table~\ref{tab:model comparison}), indicating that \texttt{fit8} is also the most robust. But we can see that its fitting and predictable performance is not bad but inferior to some of the interaction model. This may indicate a trade-off between model accuracy and interpretability. While with less model complexity, and overall model performance is better than \texttt{fit3}, we still considered it a balanced model between robustness and model performance.
+	
+	\paragraph{Interpretation of \texttt{fit8}.} Model 8 can be written by: $\log(rings) = 0.894	+ 2.167\,height - 0.526\,\log(weight.s)\sqrt{length} - 0.367\,\log(weight.sh)\sqrt{weight.v} + 1.898\,(sexadult \cdot weight.sh) + 2.563\,(sexother \cdot weight.sh) + 0.145\,(\log(weight.s) \cdot sexother).$ Height has the largest positive coefficient, indicating that taller abalones tend to be older. The negative coefficients show that increases in soft-body or shucked weight contribute less to age once the abalone is already large. The sex-related interaction terms indicate that for smaller individuals, gains in soft-body or shucked weight are much more informative about age.
+	
+	\paragraph{Back transformation for predicting test set} To generate predictions on the test set from models fitted on the log--scale, we apply 
+	Duan's smearing estimator \cite{duan1983smearing}. 
+	For each fitted model, the smearing factor is computed from the training--set residuals as $\hat{S}=\frac{1}{n}\sum_{i=1}^{n}\exp(\hat{\varepsilon}_i)$, where $\hat{\varepsilon}_i$ denotes the residuals from the log--transformed regression. Given a predicted log-response $\widehat{y}_{\log}$ for a new observation, the bias-corrected back-transformed prediction on the original scale is $\widehat{y} = \exp(\widehat{y}_{\log}) \, \hat{S}.$ To avoid excessively large predictions caused by extreme fitted log--values, we truncate  	$\widehat{y}_{\log}$ at its 99th percentile before exponentiation. The back-transformed predictions are compared with the true ring counts in the test set to compute predictive metrics (Table~\ref{tab:final_evaluation}). Among all models, the interaction model \texttt{fit6} achieves the lowest MSE, RMSE, MAE, and MAPE and the highest $R^2$, indicating strongest predictive accuracy. Also, prediction error on test set between \texttt{fit7} and \texttt{fit6} does not make significant difference, so they are all considered the best predictive model.
+	
+	
+	\begin{table}[H]
+		\centering
+		\caption{\label{tab:final_evaluation}Prediction Performance of External Validation on Original Scale}
+		\begin{tabular}{lrrrrr}
+			\toprule
+			\textbf{fit} & \textbf{MSE} & \textbf{RMSE} & \textbf{MAE} & \textbf{MAPE} & \textbf{R2} \\
+			\midrule
+			\texttt{fit1} & 4.528385 & 2.128000 & 1.525148 & 15.67823 & 0.5694579 \\
+			\texttt{fit2} & 4.517938 & 2.125544 & 1.529538 & 15.48406 & 0.5704512 \\
+			\texttt{fit3} & 4.515509 & 2.124973 & 1.520277 & 15.35285 & 0.5706822 \\
+			\texttt{fit4} & 4.118438 & 2.029394 & 1.447313 & 14.56006 & 0.6084342 \\
+			\texttt{fit5} & 4.091975 & 2.022863 & 1.437021 & 14.43896 & 0.6109502 \\
+			\texttt{fit6} & \textbf{4.017053} & \textbf{2.004259} & \textbf{1.413423} & \textbf{14.16723} & \textbf{0.6180735} \\
+			\texttt{fit7} & 4.026170 & 2.006532 & 1.419806 & 14.27184 & 0.6172067 \\
+			\texttt{fit8} & 4.716739 & 2.171806 & 1.523575 & 15.46551 & 0.5515499 \\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\paragraph{Actual vs Prediction analysis}
+	The predicted distributions concentrate more heavily in the middle age range as the model gets more refined (Figure~\ref{fig:25}), with far fewer very young or very old values. This shrinkage is most apparent in \texttt{fit8}, whose residuals are tightly centered around zero 
+	(Figure~\ref{fig:26}). By contrast, the complex models (\texttt{fit6} and \texttt{fit7}) fit the data more accurately but show larger residual spread when predicting extreme values, which indicate that they might show greater sensitivity to extreme value. Furthermore, the actual–predicted scatterplots (Figure~\ref{fig:27}) also show that transformed models (model that fitted after \texttt{fit4}) continuously bringing medium ring counts closer to the 45-degree line. Overall, these visual patterns suggest that complex models improve accuracy in the mid-range of the distribution, whereas simpler models generalize better at cost of lower predictive precision in some regions.
+	
+	
+	\section*{Conclusion}
+  In this project, we developed a sequence of regression models to predict abalone age from physical measurements, progressively refining the model structure through log–sqrt transformations, influential-point removal, interaction terms, stepwise selection, and regularization. The removal of influential observations in \texttt{fit2}–\texttt{fit3} and \texttt{fit4}–\texttt{fit5} substantially improved both in-sample fit and robustness. The interaction models \texttt{fit6} and \texttt{fit7} achieved the best overall fit and predictive accuracy, but at the cost of stronger multicollinearity, greater sensitivity to outliers, and a larger generalization gap. In contrast, the LASSO-reduced model \texttt{fit8} attained the most stable generalization and the clearest interpretability, albeit with slightly lower predictive performance.
+  
+  The scatterplots in Figure~\ref{fig:3} show that larger abalones exhibit much greater variation in age, forming a fan-shaped pattern in which conditional variance increases with body size. This motivates the use of quantile regression \citep{koenker1978quantile} to model conditional quantiles of age and capture how different parts of the distribution change with body size. Generalized Additive Models (GAMs) \citep{hastie1990gam} also provide a flexible framework for modeling nonlinear relationships, allowing predictor effects to vary smoothly without imposing a rigid functional form. Extending our analysis to quantile regression and GAMs would be a natural next step for improving both model fit and the characterization of age–size relationships in abalone populations.
+	
+   
+	\clearpage
+		\bibliographystyle{plainnat} 
+	\bibliography{refs}  
+	\clearpage
+	\section*{Appendices}
+	\subsection*{Figures}
+	
+	\foreach \i in {1,...,27} {%
+		\begin{figure}[H]
+			\centering
+			\includegraphics[width=0.95\textwidth]{\i.pdf}
+			\caption{}
+			\label{fig:\i}
+		\end{figure}
+	}
+	
+	\clearpage
+	\subsection*{Tables}
+	
+	\begin{table}[!h]
+		\centering
+		\caption{\label{tab:data_exploration}UCI Abalone Dataset Metadata with Model Variable Mapping}
+		\begin{tabular}{lllllll}
+			\toprule
+			Variable Name & Model Name & Role & Type & Description & Units & Missing \\
+			\midrule
+			Sex             & \texttt{sex}       & Feature & Categorical & M, F, and I (infant) &      & no \\
+			Length          & \texttt{length}    & Feature & Continuous  & Longest shell measurement & mm   & no \\
+			Diameter        & \texttt{diameter}  & Feature & Continuous  & Perpendicular to length  & mm   & no \\
+			Height          & \texttt{height}    & Feature & Continuous  & With meat in shell       & mm   & no \\
+			Whole\_weight   & \texttt{weight.w}  & Feature & Continuous  & Whole abalone            & grams& no \\
+			Shucked\_weight & \texttt{weight.sh} & Feature & Continuous  & Weight of meat           & grams& no \\
+			Viscera\_weight & \texttt{weight.v}  & Feature & Continuous  & Gut weight (after bleeding) & grams & no \\
+			Shell\_weight   & \texttt{weight.s}  & Feature & Continuous  & After being dried        & grams& no \\
+			Rings           & \texttt{rings}     & Target  & Integer     & +1.5 gives age in years  &      & no \\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	
+	\begin{table}[!h]
+		\centering
+		\caption{\label{tab:EDA}Numeric Diagnostics for Abalone Variables}
+		\begin{tabular}{lrrrrrrrrr}
+			\toprule
+			variables & min & Q1 & mean & median & Q3 & max & zero & minus & outlier\\
+			\midrule
+			length   & 0.0750 & 0.4500 & 0.5239921 & 0.5450 & 0.615 & 0.8150 & 0 & 0 & 49\\
+			diameter & 0.0550 & 0.3500 & 0.4078813 & 0.4250 & 0.480 & 0.6500 & 0 & 0 & 59\\
+			height   & 0.0000 & 0.1150 & 0.1395164 & 0.1400 & 0.165 & 1.1300 & 2 & 0 & 29\\
+			weight.w & 0.0020 & 0.4415 & 0.8287422 & 0.7995 & 1.153 & 2.8255 & 0 & 0 & 30\\
+			weight.s & 0.0010 & 0.1860 & 0.3593675 & 0.3360 & 0.502 & 1.4880 & 0 & 0 & 48\\
+			weight.v & 0.0005 & 0.0935 & 0.1805936 & 0.1710 & 0.253 & 0.7600 & 0 & 0 & 26\\
+			weight.sh& 0.0015 & 0.1300 & 0.2388309 & 0.2340 & 0.329 & 1.0050 & 0 & 0 & 35\\
+			rings    & 1.0000 & 8.0000 & 9.9336845 & 9.0000 & 11.000& 29.0000 & 0 & 0 & 278\\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[!h]
+		\centering
+		\caption{\label{tab:EDA_cat}Categorical Diagnostics for Abalone Variables}
+		\begin{tabular}{lrrrrr}
+			\toprule
+			variables & levels & N & freq & ratio & rank\\
+			\midrule
+			sex & M & 4177 & 1528 & 36.58128 & 1\\
+			sex & I & 4177 & 1342 & 32.12832 & 2\\
+			sex & F & 4177 & 1307 & 31.29040 & 3\\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[!h]
+		\centering
+		\caption{\label{tab:height_zero}Samples with Height = 0}
+		\begin{tabular}{r l r r r r r r r r}
+			\toprule
+			row\_num & sex & length & diameter & height & weight.w & weight.s & weight.v & weight.sh & rings\\
+			\midrule
+			1258 & I & 0.430 & 0.34 & 0 & 0.428 & 0.2065 & 0.0860 & 0.1150 & 8\\
+			3997 & I & 0.315 & 0.23 & 0 & 0.134 & 0.0575 & 0.0285 & 0.3505 & 6\\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[!h]
+		\centering
+		\caption{\label{tab:outliers}Removed Samples — Top 2 Height Outliers}
+		\begin{tabular}{r l r r r r r r r r}
+			\toprule
+			row\_num & sex & length & diameter & height & weight.w & weight.s & weight.v & weight.sh & rings\\
+			\midrule
+			2051 & F & 0.455 & 0.355 & 1.130 & 0.594 & 0.3320 & 0.1160 & 0.1335 & 8\\
+			1417 & M & 0.705 & 0.565 & 0.515 & 2.210 & 1.1075 & 0.4865 & 0.5120 & 10\\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[!htbp]
+		\centering
+		\caption{Model 1 — Baseline Linear Model on Original Scale}
+		\label{tab:fit1}
+		\begin{tabular}{@{\extracolsep{5pt}}lc}
+			\toprule
+			& \multicolumn{1}{c}{\textit{Dependent variable:}} \\
+			\cmidrule(lr){2-2}
+			& rings \\
+			\midrule
+			sexother   & $-$0.859$^{***}$ \\ 
+			& (0.100) \\[0.4ex]
+			length     & $-$1.663 \\ 
+			& (2.011) \\[0.4ex]
+			diameter   & 9.143$^{***}$ \\ 
+			& (2.488) \\[0.4ex]
+			height     & 24.275$^{***}$ \\ 
+			& (2.617) \\[0.4ex]
+			weight.w   & 9.137$^{***}$ \\ 
+			& (0.827) \\[0.4ex]
+			weight.s   & $-$19.541$^{***}$ \\ 
+			& (0.937) \\[0.4ex]
+			weight.v   & $-$12.147$^{***}$ \\ 
+			& (1.456) \\[0.4ex]
+			weight.sh  & 7.827$^{***}$ \\ 
+			& (1.313) \\[0.4ex]
+			Constant   & 3.749$^{***}$ \\ 
+			& (0.326) \\[0.4ex]
+			\midrule
+			Observations        & 3,340 \\ 
+			R$^{2}$             & 0.537 \\ 
+			Adjusted R$^{2}$    & 0.536 \\ 
+			Residual Std. Error & 2.194 (df = 3331) \\ 
+			F Statistic         & 483.113$^{***}$ (df = 8; 3331) \\ 
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[!htbp]
+		\centering
+		\caption{Model 2 — Log-Transformed Full Model}
+		\label{tab:fit2}
+		\begin{tabular}{@{\extracolsep{5pt}}lc}
+			\toprule
+			& \multicolumn{1}{c}{\textit{Dependent variable:}} \\
+			\cmidrule(lr){2-2}
+			& log(rings) \\
+			\midrule
+			sexother   & $-$0.097$^{***}$ \\ 
+			& (0.009) \\[0.4ex]
+			length     & 0.394$^{**}$ \\ 
+			& (0.185) \\[0.4ex]
+			diameter   & 1.213$^{***}$ \\ 
+			& (0.229) \\[0.4ex]
+			height     & 2.664$^{***}$ \\ 
+			& (0.241) \\[0.4ex]
+			weight.w   & 0.622$^{***}$ \\ 
+			& (0.076) \\[0.4ex]
+			weight.s   & $-$1.622$^{***}$ \\ 
+			& (0.086) \\[0.4ex]
+			weight.v   & $-$0.979$^{***}$ \\ 
+			& (0.134) \\[0.4ex]
+			weight.sh  & 0.492$^{***}$ \\ 
+			& (0.121) \\[0.4ex]
+			Constant   & 1.332$^{***}$ \\ 
+			& (0.030) \\[0.4ex]
+			\midrule
+			Observations        & 3,340 \\ 
+			R$^{2}$             & 0.598 \\ 
+			Adjusted R$^{2}$    & 0.597 \\ 
+			Residual Std. Error & 0.202 (df = 3331) \\ 
+			F Statistic         & 620.396$^{***}$ (df = 8; 3331) \\ 
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[!h]
+		\centering
+		\caption{\label{tab:remove_influential}Removed Outlier Samples (Based on fit2)}
+		\begin{tabular}{r l r r r r r r r r}
+			\toprule
+			row\_num & sex & length & diameter & height & weight.w & weight.s & weight.v & weight.sh & rings\\
+			\midrule
+			183  & other & 0.075 & 0.055 & 0.010 & 0.0020 & 0.0010 & 0.0005 & 0.0015 & 1\\
+			345  & other & 0.385 & 0.305 & 0.095 & 0.2520 & 0.0915 & 0.0550 & 0.0900 & 14\\
+			378  & adult & 0.700 & 0.585 & 0.185 & 1.8075 & 0.7055 & 0.3215 & 0.4750 & 29\\
+			454  & other & 0.450 & 0.350 & 0.140 & 0.4740 & 0.2100 & 0.1090 & 0.1275 & 16\\
+			473  & other & 0.525 & 0.410 & 0.175 & 0.8740 & 0.3585 & 0.2070 & 0.2050 & 18\\
+			489  & other & 0.495 & 0.370 & 0.125 & 0.4775 & 0.1850 & 0.0705 & 0.1690 & 18\\
+			497  & other & 0.465 & 0.360 & 0.105 & 0.4980 & 0.2140 & 0.1160 & 0.1400 & 15\\
+			500  & other & 0.530 & 0.415 & 0.145 & 0.9440 & 0.3845 & 0.1850 & 0.2650 & 21\\
+			526  & other & 0.450 & 0.355 & 0.120 & 0.4120 & 0.1145 & 0.0665 & 0.1600 & 19\\
+			534  & adult & 0.490 & 0.390 & 0.150 & 0.5730 & 0.2250 & 0.1240 & 0.1700 & 21\\
+			535  & adult & 0.490 & 0.385 & 0.150 & 0.7865 & 0.2410 & 0.1400 & 0.2400 & 23\\
+			557  & adult & 0.395 & 0.315 & 0.105 & 0.3515 & 0.1185 & 0.0910 & 0.1195 & 16\\
+			575  & other & 0.150 & 0.100 & 0.025 & 0.0150 & 0.0045 & 0.0040 & 0.0050 & 2\\
+			957  & other & 0.185 & 0.375 & 0.120 & 0.4645 & 0.1960 & 0.1045 & 0.1500 & 6\\
+			1216 & adult & 0.725 & 0.575 & 0.240 & 2.2100 & 1.3510 & 0.4130 & 0.5015 & 13\\
+			1836 & adult & 0.550 & 0.415 & 0.135 & 0.7750 & 0.3020 & 0.1790 & 0.2600 & 23\\
+			1926 & adult & 0.425 & 0.315 & 0.125 & 0.3525 & 0.1135 & 0.0565 & 0.1300 & 18\\
+			1928 & adult & 0.465 & 0.350 & 0.130 & 0.4940 & 0.1945 & 0.1030 & 0.1550 & 18\\
+			1929 & adult & 0.350 & 0.255 & 0.085 & 0.2145 & 0.1000 & 0.0465 & 0.0600 & 13\\
+			2665 & other & 0.540 & 0.435 & 0.145 & 0.9700 & 0.4285 & 0.2200 & 0.2640 & 17\\
+			2813 & adult & 0.710 & 0.570 & 0.195 & 1.3480 & 0.8985 & 0.4435 & 0.4535 & 11\\
+			3130 & other & 0.520 & 0.390 & 0.140 & 0.7325 & 0.2415 & 0.1440 & 0.2600 & 19\\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[!htbp]
+		\centering
+		\caption{Model 3 — Log Model After Removing fit2 Influential Points}
+		\label{tab:fit3}
+		\begin{tabular}{@{\extracolsep{5pt}}lc}
+			\toprule
+			& \multicolumn{1}{c}{\textit{Dependent variable:}} \\
+			\cmidrule(lr){2-2}
+			& log(rings) \\
+			\midrule
+			sexother   & $-$0.100$^{***}$ \\ 
+			& (0.009) \\[0.4ex]
+			length     & 0.298 \\ 
+			& (0.186) \\[0.4ex]
+			diameter   & 1.263$^{***}$ \\ 
+			& (0.228) \\[0.4ex]
+			height     & 2.463$^{***}$ \\ 
+			& (0.233) \\[0.4ex]
+			weight.w   & 0.614$^{***}$ \\ 
+			& (0.075) \\[0.4ex]
+			weight.s   & $-$1.607$^{***}$ \\ 
+			& (0.085) \\[0.4ex]
+			weight.v   & $-$0.915$^{***}$ \\ 
+			& (0.131) \\[0.4ex]
+			weight.sh  & 0.536$^{***}$ \\ 
+			& (0.118) \\[0.4ex]
+			Constant   & 1.368$^{***}$ \\ 
+			& (0.029) \\[0.4ex]
+			\midrule
+			Observations        & 3,318 \\ 
+			R$^{2}$             & 0.612 \\ 
+			Adjusted R$^{2}$    & 0.611 \\ 
+			Residual Std. Error & 0.194 (df = 3309) \\ 
+			F Statistic         & 651.547$^{***}$ (df = 8; 3309) \\ 
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[!htbp]
+		\centering
+		\caption{Model 4 — Stepwise-Selected Log Model with Transformations}
+		\label{tab:fit4}
+		\begin{tabular}{@{\extracolsep{5pt}}lc}
+			\toprule
+			& \multicolumn{1}{c}{\textit{Dependent variable:}} \\
+			\cmidrule(lr){2-2}
+			& log(rings) \\
+			\midrule
+			log(weight.sh) & 0.276$^{***}$ \\ 
+			& (0.030) \\[0.4ex]
+			log(weight.s)  & $-$0.496$^{***}$ \\ 
+			& (0.050) \\[0.4ex]
+			log(weight.w)  & 0.434$^{***}$ \\ 
+			& (0.081) \\[0.4ex]
+			sexother       & $-$0.066$^{***}$ \\ 
+			& (0.009) \\[0.4ex]
+			sqrt(weight.v) & $-$1.229$^{***}$ \\ 
+			& (0.226) \\[0.4ex]
+			log(length)    & $-$0.449$^{***}$ \\ 
+			& (0.099) \\[0.4ex]
+			log(diameter)  & $-$1.451$^{*}$ \\ 
+			& (0.810) \\[0.4ex]
+			log(height)    & $-$0.299$^{**}$ \\ 
+			& (0.125) \\[0.4ex]
+			log(weight.v)  & 0.119$^{***}$ \\ 
+			& (0.040) \\[0.4ex]
+			weight.s       & $-$0.497$^{***}$ \\ 
+			& (0.119) \\[0.4ex]
+			weight.w       & 0.412$^{***}$ \\ 
+			& (0.080) \\[0.4ex]
+			sqrt(height)   & 2.459$^{***}$ \\ 
+			& (0.738) \\[0.4ex]
+			diameter       & $-$8.428$^{***}$ \\ 
+			& (3.075) \\[0.4ex]
+			sqrt(diameter) & 16.193$^{**}$ \\ 
+			& (6.370) \\[0.4ex]
+			Constant       & $-$7.144$^{**}$ \\ 
+			& (3.419) \\[0.4ex]
+			\midrule
+			Observations        & 3,318 \\ 
+			R$^{2}$             & 0.657 \\ 
+			Adjusted R$^{2}$    & 0.656 \\ 
+			Residual Std. Error & 0.183 (df = 3303) \\ 
+			F Statistic         & 452.226$^{***}$ (df = 14; 3303) \\ 
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[!h]
+		\centering
+		\caption{\label{tab:Influencial_Points4}Removed Outlier Samples (Based on fit4)}
+		\begin{tabular}{r l r r r r r r r r}
+			\toprule
+			row\_num & sex & length & diameter & height & weight.w & weight.s & weight.v & weight.sh & rings\\
+			\midrule
+			229  & adult & 0.600 & 0.495 & 0.195 & 1.0575 & 0.3840 & 0.1900 & 0.3750 & 26\\
+			270  & adult & 0.585 & 0.450 & 0.170 & 0.8685 & 0.3325 & 0.1635 & 0.2700 & 22\\
+			340  & adult & 0.600 & 0.470 & 0.155 & 1.0360 & 0.4375 & 0.1960 & 0.3250 & 20\\
+			342  & adult & 0.545 & 0.420 & 0.140 & 0.7505 & 0.2475 & 0.1300 & 0.2550 & 22\\
+			378  & adult & 0.580 & 0.460 & 0.150 & 0.9955 & 0.4290 & 0.2120 & 0.2600 & 19\\
+			391  & adult & 0.605 & 0.485 & 0.165 & 1.0105 & 0.4350 & 0.2090 & 0.3000 & 19\\
+			451  & other & 0.450 & 0.345 & 0.135 & 0.4430 & 0.1975 & 0.0875 & 0.1175 & 14\\
+			542  & other & 0.165 & 0.110 & 0.020 & 0.0190 & 0.0065 & 0.0025 & 0.0050 & 4\\
+			708  & other & 0.280 & 0.120 & 0.075 & 0.1170 & 0.0455 & 0.0290 & 0.0345 & 4\\
+			919  & adult & 0.635 & 0.495 & 0.015 & 1.1565 & 0.5115 & 0.3080 & 0.2885 & 9\\
+			1656 & adult & 0.500 & 0.380 & 0.155 & 0.6600 & 0.2655 & 0.1365 & 0.2150 & 19\\
+			1669 & other & 0.130 & 0.095 & 0.035 & 0.0105 & 0.0050 & 0.0065 & 0.0035 & 4\\
+			1709 & other & 0.165 & 0.115 & 0.015 & 0.0145 & 0.0055 & 0.0030 & 0.0050 & 4\\
+			1710 & other & 0.190 & 0.130 & 0.030 & 0.0295 & 0.0155 & 0.0150 & 0.0100 & 6\\
+			1844 & adult & 0.610 & 0.490 & 0.150 & 1.1030 & 0.4250 & 0.2025 & 0.3600 & 23\\
+			2086 & other & 0.475 & 0.365 & 0.100 & 0.1315 & 0.2025 & 0.0875 & 0.1230 & 7\\
+			2441 & other & 0.355 & 0.270 & 0.075 & 0.2040 & 0.3045 & 0.0460 & 0.0595 & 7\\
+			2635 & other & 0.375 & 0.280 & 0.100 & 0.2565 & 0.1165 & 0.0585 & 0.0725 & 12\\
+			2795 & other & 0.240 & 0.185 & 0.060 & 0.0655 & 0.0295 & 0.0005 & 0.0200 & 4\\
+			3042 & other & 0.170 & 0.105 & 0.035 & 0.0340 & 0.0120 & 0.0085 & 0.0050 & 4\\
+			3097 & adult & 0.445 & 0.345 & 0.140 & 0.4760 & 0.2055 & 0.1015 & 0.1085 & 15\\
+			3099 & other & 0.160 & 0.120 & 0.020 & 0.0180 & 0.0075 & 0.0045 & 0.0050 & 4\\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[!htbp]
+		\centering
+		\caption{Model 5 — Log Model After Removing fit4 Influential Points}
+		\label{tab:fit5}
+		\begin{tabular}{@{\extracolsep{5pt}}lc}
+			\toprule
+			& \multicolumn{1}{c}{\textit{Dependent variable:}} \\
+			\cmidrule(lr){2-2}
+			& log(rings) \\
+			\midrule
+			log(weight.sh) & 0.146$^{***}$ \\ 
+			& (0.043) \\[0.4ex]
+			log(weight.s)  & $-$0.739$^{***}$ \\ 
+			& (0.033) \\[0.4ex]
+			log(weight.w)  & 0.900$^{***}$ \\ 
+			& (0.066) \\[0.4ex]
+			sqrt(length)   & $-$1.287$^{***}$ \\ 
+			& (0.277) \\[0.4ex]
+			sexother       & $-$0.061$^{***}$ \\ 
+			& (0.009) \\[0.4ex]
+			sqrt(weight.v) & $-$0.667$^{***}$ \\ 
+			& (0.112) \\[0.4ex]
+			height         & 0.959$^{***}$ \\ 
+			& (0.233) \\[0.4ex]
+			diameter       & $-$2.172$^{**}$ \\ 
+			& (1.069) \\[0.4ex]
+			weight.sh      & 0.394$^{***}$ \\ 
+			& (0.130) \\[0.4ex]
+			sqrt(diameter) & 3.570$^{**}$ \\ 
+			& (1.418) \\[0.4ex]
+			Constant       & 1.536$^{***}$ \\ 
+			& (0.567) \\[0.4ex]
+			\midrule
+			Observations        & 3,296 \\ 
+			R$^{2}$             & 0.662 \\ 
+			Adjusted R$^{2}$    & 0.661 \\ 
+			Residual Std. Error & 0.179 (df = 3285) \\ 
+			F Statistic         & 642.617$^{***}$ (df = 10; 3285) \\ 
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\clearpage
+	{\centering
+		\begin{longtable}{@{\extracolsep{5pt}}lc}
+			\caption{Model 6 — Stepwise Log Model with Two-Way Interactions (Initial)}
+			\label{tab:model6}\\
+			\toprule
+			& \multicolumn{1}{c}{\textit{Dependent variable:}} \\
+			\cmidrule(lr){2-2}
+			& log(rings) \\
+			\midrule
+			\endfirsthead
+			
+			\toprule
+			& \multicolumn{1}{c}{\textit{Dependent variable:}} \\
+			\cmidrule(lr){2-2}
+			& log(rings) \\
+			\midrule
+			\endhead
+			
+			\midrule
+			\multicolumn{2}{r}{Continued on next page}\\
+			\midrule
+			\endfoot
+			
+			\bottomrule
+			\endlastfoot
+			
+			log(weight.sh) & 0.855$^{***}$ \\ 
+			& (0.139) \\[0.4ex]
+			log(weight.s)  & $-$0.771$^{***}$ \\ 
+			& (0.035) \\[0.4ex]
+			log(weight.w)  & 0.352 \\ 
+			& (0.291) \\[0.4ex]
+			sqrt(length)   & $-$1.186$^{***}$ \\ 
+			& (0.276) \\[0.4ex]
+			sexother       & $-$0.578$^{***}$ \\ 
+			& (0.114) \\[0.4ex]
+			sqrt(weight.v) & $-$10.178$^{***}$ \\ 
+			& (2.740) \\[0.4ex]
+			height         & 0.729$^{***}$ \\ 
+			& (0.259) \\[0.4ex]
+			diameter       & $-$18.693$^{***}$ \\ 
+			& (3.176) \\[0.4ex]
+			weight.sh      & 0.439 \\ 
+			& (0.291) \\[0.4ex]
+			sqrt(diameter) & 20.290$^{***}$ \\ 
+			& (4.130) \\[0.4ex]
+			log(weight.sh):sexother & $-$0.284$^{***}$ \\ 
+			& (0.049) \\[0.4ex]
+			log(weight.s):sexother  & 0.189$^{***}$ \\ 
+			& (0.036) \\[0.4ex]
+			sexother:weight.sh      & 0.843$^{***}$ \\ 
+			& (0.206) \\[0.4ex]
+			log(weight.w):diameter  & 1.436$^{**}$ \\ 
+			& (0.621) \\[0.4ex]
+			log(weight.s):log(weight.w) & $-$0.073$^{**}$ \\ 
+			& (0.031) \\[0.4ex]
+			log(weight.sh):sqrt(weight.v) & $-$1.486$^{***}$ \\ 
+			& (0.364) \\[0.4ex]
+			sexother:height & 0.966$^{*}$ \\ 
+			& (0.548) \\[0.4ex]
+			sqrt(weight.v):sqrt(diameter) & 11.330$^{***}$ \\ 
+			& (3.449) \\[0.4ex]
+			log(weight.sh):log(weight.w) & 0.120$^{***}$ \\ 
+			& (0.040) \\[0.4ex]
+			Constant       & $-$1.418 \\ 
+			& (1.524) \\[0.4ex]
+			Observations   & 3,296 \\ 
+			R$^{2}$        & 0.672 \\ 
+			Adjusted R$^{2}$ & 0.670 \\ 
+			Residual Std. Error & 0.176 (df = 3276) \\ 
+			F Statistic    & 353.569$^{***}$ (df = 19; 3276) \\ 
+		\end{longtable}
+	}
+	
+	\begin{table}[!h]
+		\centering
+		\caption{\label{tab:ip}Removed Outlier Samples (Based on fit6)}
+		\begin{tabular}{r l r r r r r r r r}
+			\toprule
+			row\_num & sex & length & diameter & height & weight.w & weight.s & weight.v & weight.sh & rings\\
+			\midrule
+			281  & adult & 0.630 & 0.515 & 0.160 & 1.0160 & 0.4215 & 0.2440 & 0.3550 & 19\\
+			326  & adult & 0.630 & 0.500 & 0.170 & 1.3135 & 0.5595 & 0.2670 & 0.4000 & 20\\
+			349  & adult & 0.565 & 0.455 & 0.150 & 0.8205 & 0.3650 & 0.1590 & 0.2600 & 18\\
+			404  & adult & 0.325 & 0.230 & 0.090 & 0.1470 & 0.0600 & 0.0340 & 0.0450 & 4\\
+			409  & adult & 0.175 & 0.125 & 0.040 & 0.0240 & 0.0095 & 0.0060 & 0.0050 & 4\\
+			410  & adult & 0.155 & 0.110 & 0.040 & 0.0155 & 0.0065 & 0.0030 & 0.0050 & 3\\
+			1111 & other & 0.140 & 0.105 & 0.035 & 0.0140 & 0.0055 & 0.0025 & 0.0040 & 3\\
+			1376 & other & 0.275 & 0.175 & 0.090 & 0.2315 & 0.0960 & 0.0570 & 0.0705 & 5\\
+			1693 & adult & 0.375 & 0.305 & 0.090 & 0.3245 & 0.1395 & 0.0565 & 0.0950 & 5\\
+			1752 & adult & 0.475 & 0.380 & 0.135 & 0.4860 & 0.1735 & 0.0700 & 0.1850 & 7\\
+			1843 & adult & 0.590 & 0.475 & 0.160 & 0.9455 & 0.3815 & 0.1840 & 0.2700 & 19\\
+			1858 & adult & 0.180 & 0.125 & 0.050 & 0.0230 & 0.0085 & 0.0055 & 0.0100 & 3\\
+			1867 & adult & 0.155 & 0.115 & 0.025 & 0.0240 & 0.0090 & 0.0050 & 0.0075 & 5\\
+			1953 & adult & 0.515 & 0.395 & 0.165 & 0.7565 & 0.1905 & 0.1700 & 0.3205 & 10\\
+			2146 & other & 0.405 & 0.310 & 0.110 & 0.9100 & 0.4160 & 0.2075 & 0.0995 & 8\\
+			2472 & other & 0.200 & 0.150 & 0.040 & 0.0460 & 0.0210 & 0.0070 & 0.0065 & 4\\
+			3007 & other & 0.380 & 0.275 & 0.095 & 0.2425 & 0.1060 & 0.0485 & 0.2100 & 6\\
+			3076 & other & 0.140 & 0.105 & 0.035 & 0.0145 & 0.0050 & 0.0035 & 0.0050 & 4\\
+			3094 & adult & 0.500 & 0.400 & 0.165 & 0.7105 & 0.2700 & 0.1455 & 0.2250 & 20\\
+			3097 & other & 0.725 & 0.550 & 0.220 & 2.0495 & 0.7735 & 0.4405 & 0.6550 & 10\\
+			3140 & other & 0.580 & 0.435 & 0.150 & 0.8915 & 0.3630 & 0.1925 & 0.2515 & 6\\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{center}
+		\begin{longtable}{@{\extracolsep{5pt}}lc}
+			\caption{Model 7 — Refined Two-Way Interaction Model After Cleaning}
+			\label{tab:fit7}\\
+			\toprule
+			& \multicolumn{1}{c}{\textit{Dependent variable:}} \\
+			\cmidrule(lr){2-2}
+			& log(rings) \\
+			\midrule
+			\endfirsthead
+			
+			\toprule
+			& \multicolumn{1}{c}{\textit{Dependent variable:}} \\
+			\cmidrule(lr){2-2}
+			& log(rings) \\
+			\midrule
+			\endhead
+			
+			\midrule
+			\multicolumn{2}{r}{Continued on next page}\\
+			\midrule
+			\endfoot
+			
+			\bottomrule
+			\endlastfoot
+			
+			log(weight.sh) & $-$2.839$^{***}$ \\ 
+			& (0.952) \\[0.4ex]
+			log(weight.s)  & $-$1.618$^{***}$ \\ 
+			& (0.537) \\[0.4ex]
+			log(weight.w)  & $-$2.549$^{***}$ \\ 
+			& (0.694) \\[0.4ex]
+			sqrt(length)   & 60.919$^{***}$ \\ 
+			& (14.281) \\[0.4ex]
+			sexother       & $-$0.744$^{***}$ \\ 
+			& (0.144) \\[0.4ex]
+			sqrt(weight.v) & $-$5.497$^{*}$ \\ 
+			& (3.272) \\[0.4ex]
+			height         & 77.997$^{**}$ \\ 
+			& (32.546) \\[0.4ex]
+			diameter       & $-$104.874$^{***}$ \\ 
+			& (25.177) \\[0.4ex]
+			weight.sh      & $-$32.676$^{**}$ \\ 
+			& (13.113) \\[0.4ex]
+			sqrt(diameter) & 122.005$^{***}$ \\ 
+			& (27.517) \\[0.4ex]
+			log(weight.sh):sexother & $-$0.309$^{***}$ \\ 
+			& (0.057) \\[0.4ex]
+			log(weight.sh):sqrt(weight.v) & $-$0.974$^{**}$ \\ 
+			& (0.426) \\[0.4ex]
+			log(weight.sh):height & 6.327$^{***}$ \\ 
+			& (2.434) \\[0.4ex]
+			log(weight.sh):diameter & $-$15.015$^{***}$ \\ 
+			& (4.162) \\[0.4ex]
+			log(weight.sh):sqrt(diameter) & 13.662$^{***}$ \\ 
+			& (3.827) \\[0.4ex]
+			log(weight.s):log(weight.w) & $-$0.200$^{***}$ \\ 
+			& (0.068) \\[0.4ex]
+			log(weight.s):sexother & 0.180$^{***}$ \\ 
+			& (0.037) \\[0.4ex]
+			log(weight.w):sqrt(length) & 4.276$^{***}$ \\ 
+			& (0.880) \\[0.4ex]
+			sqrt(length):sqrt(weight.v) & $-$12.054$^{**}$ \\ 
+			& (5.833) \\[0.4ex]
+			sqrt(length):height & $-$36.406$^{**}$ \\ 
+			& (16.918) \\[0.4ex]
+			sqrt(length):diameter & 98.844$^{***}$ \\ 
+			& (27.941) \\[0.4ex]
+			sqrt(length):sqrt(diameter) & $-$140.691$^{***}$ \\ 
+			& (36.831) \\[0.4ex]
+			sexother:height & 1.470$^{**}$ \\ 
+			& (0.659) \\[0.4ex]
+			sexother:weight.sh & 1.092$^{***}$ \\ 
+			& (0.254) \\[0.4ex]
+			sqrt(weight.v):sqrt(diameter) & 19.065$^{***}$ \\ 
+			& (5.898) \\[0.4ex]
+			height:diameter & 116.192$^{**}$ \\ 
+			& (58.456) \\[0.4ex]
+			height:weight.sh & $-$15.063$^{**}$ \\ 
+			& (7.165) \\[0.4ex]
+			height:sqrt(diameter) & $-$133.598 \\ 
+			& (81.688) \\[0.4ex]
+			diameter:weight.sh & $-$55.798$^{***}$ \\ 
+			& (20.520) \\[0.4ex]
+			weight.sh:sqrt(diameter) & 90.872$^{***}$ \\ 
+			& (34.030) \\[0.4ex]
+			log(weight.s):sqrt(length) & 1.150 \\ 
+			& (0.715) \\[0.4ex]
+			Constant       & $-$42.558$^{***}$ \\ 
+			& (9.327) \\[0.4ex]
+			Observations   & 3,275 \\ 
+			R$^{2}$        & 0.676 \\ 
+			Adjusted R$^{2}$ & 0.673 \\ 
+			Residual Std. Error & 0.173 (df = 3243) \\ 
+			F Statistic    & 218.003$^{***}$ (df = 31; 3243) \\ 
+		\end{longtable}
+	\end{center}
+	% --------- end Model 7 longtable ---------
+	
+	\begin{table}[H]
+		\centering
+		\caption{\label{tab:lasso}LASSO Feature Selection Results (Sorted by |coef\_1se|)}
+		\begin{tabular}{lrr}
+			\toprule
+			variable & coef\_min & coef\_1se\\
+			\midrule
+			(Intercept)                 & 3.2372  & 2.7533\\
+			height                      & 0.4300  & 0.9655\\
+			log(weight.s):sqrt(length)  & -0.7934 & -0.8039\\
+			sqrt(length)                & -1.4744 & -0.7877\\
+			log(weight.w):sqrt(length)  & 0.9783  & 0.5263\\
+			log(weight.sh):sqrt(weight.v) & 0.0032 & 0.1951\\
+			log(weight.sh):sqrt(diameter) & -0.0555 & 0.1929\\
+			sexother:weight.sh          & 0.6629  & 0.1597\\
+			log(weight.sh)              & 0.3455  & 0.1475\\
+			log(weight.w)               & 0.1231  & 0.1238\\
+			log(weight.s):sexother      & 0.1175  & 0.0648\\
+			weight.sh                   & 0.0000  & 0.0300\\
+			sqrt(length):sqrt(weight.v) & -0.4070 & -0.0243\\
+			sexother                    & -0.3725 & -0.0002\\
+			log(weight.s)               & -0.1680 & 0.0000\\
+			sqrt(weight.v)              & -0.2680 & 0.0000\\
+			diameter                    & -0.0001 & 0.0000\\
+			log(weight.sh):sexother     & -0.1545 & 0.0000\\
+			log(weight.sh):diameter     & -0.2138 & 0.0000\\
+			sqrt(length):height         & -0.0001 & 0.0000\\
+			sqrt(length):diameter       & -0.0483 & 0.0000\\
+			sexother:height             & 0.6570  & 0.0000\\
+			sqrt(weight.v):sqrt(diameter) & 0.0003 & 0.0000\\
+			height:diameter             & 0.0002  & 0.0000\\
+			height:weight.sh            & 1.0496  & 0.0000\\
+			height:sqrt(diameter)       & 0.0936  & 0.0000\\
+			diameter:weight.sh          & 0.1886  & 0.0000\\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	\begin{table}[H]
+		\centering
+		\caption{Model 8 --- Reduced Interaction Model Guided by LASSO}
+		\label{tab:fit8}
+		\begin{tabular}{lc}
+			\toprule
+			& \textit{Dependent variable:} \\
+			\cline{2-2}
+			& \textit{log(rings)} \\
+			\midrule
+			height & $2.167^{***}$ \\
+			& $(0.237)$ \\[0.5em]
+			
+			log(weight.s):sqrt(length) & $-0.526^{***}$ \\
+			& $(0.023)$ \\[0.5em]
+			
+			log(weight.sh):sqrt(weight.v) & $-0.367^{***}$ \\
+			& $(0.062)$ \\[0.5em]
+			
+			sexadult:weight.sh & $1.898^{***}$ \\
+			& $(0.098)$ \\[0.5em]
+			
+			sexother:weight.sh & $2.563^{***}$ \\
+			& $(0.112)$ \\[0.5em]
+			
+			log(weight.s):sexother & $0.145^{***}$ \\
+			& $(0.006)$ \\[0.5em]
+			
+			Constant & $0.894^{***}$ \\
+			& $(0.071)$ \\
+			\midrule
+			Observations & 3,275 \\
+			R$^2$ & 0.611 \\
+			Adjusted R$^2$ & 0.611 \\
+			Residual Std. Error & 0.189 (df = 3268) \\
+			F Statistic & $856.2^{***}$ (df = 6; 3268) \\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+	
+	
+	\begin{table}[!h]
+		\centering
+		\caption{Variance Inflation Factors for Reduced Model (\texttt{fit8})}
+		\label{tab:vif_fit8}
+		\begin{tabular}{lccc}
+			\toprule
+			\textbf{Predictor} & \textbf{GVIF} & \textbf{Df} & \textbf{GVIF}$^{1/(2\cdot {Df})}$ \\
+			\midrule
+			height                         & 7.248221  & 1 & 2.692252 \\
+			log(weight.s):sqrt(length)  & 8.917097  & 1 & 2.986151 \\
+			log(weight.sh):sqrt(weight.v) & 3.249721  & 1 & 1.802698 \\
+			sex:weight.sh                & 22.227744 & 2 & 2.171320 \\
+			log(weight.s):sex        & 2.982955  & 1 & 1.727123 \\
+			\bottomrule
+		\end{tabular}
+	\end{table}
+
+\end{document}

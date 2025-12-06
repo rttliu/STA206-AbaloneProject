@@ -1,0 +1,656 @@
+---
+title: "Abalone Age Prediction Project - R Code"
+author: "Ruitian Liu"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+    latex_engine: xelatex
+  html_document:
+    toc: true
+    toc_float: true
+    theme: readable
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(ggplot2)
+library(GGally)  
+library(patchwork)  
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
+# Data Preparation
+
+```{r libraries_data}
+# ==== Libraries grouped by purpose for maintenance ====
+# Data wrangling
+library(dplyr); library(tidyr); library(tibble); library(tidyverse)
+# Tables / reporting (now just using base printing)
+# Quality diagnostics / EDA helpers
+library(dlookr); library(psych); library(skimr)
+# Web scraping for metadata table from UCI
+library(rvest); library(xml2)
+# Statistics / modeling
+library(broom); library(forecast); library(MASS); library(caret); library(car)
+library(glmnet); library(lmtest); library(effects)
+# Reshaping / viz utilities
+library(reshape2); library(patchwork)
+# Misc (can be pruned if unused in your session)
+library(archive); library(bslib); library(fastmap)
+
+# ==== Load the Abalone dataset from the UCI repository ====
+aburl   <- 'http://archive.ics.uci.edu/ml/machine-learning-databases/abalone/abalone.data'
+abnames <- c('sex','length','diameter','height','weight.w','weight.s','weight.v','weight.sh','rings')
+abalone <- read.table(aburl, header = FALSE, sep = ',', col.names = abnames)
+```
+
+## Data Exploration
+
+```{r data_exploration}
+# Purpose: fetch a summary/metadata table from the UCI dataset page to include in the report.
+abalone_html <- read_html("https://archive.ics.uci.edu/dataset/1/abalone")
+abalone_meta <- abalone_html %>% html_elements(xpath = "/html/body/div/div[1]/div[1]/main/div/div[1]/div[3]/div[2]/div/div/div[1]/table") %>% html_table()
+
+if (length(abalone_meta) > 0) {
+  print(abalone_meta[[1]])
+}
+```
+
+## EDA
+
+```{r EDA}
+# Numeric variable diagnostics
+abalone %>% diagnose_numeric()
+
+# Categorical variable diagnostics
+abalone %>% diagnose_category()
+
+# Specific data quality check: height == 0
+abalone %>% mutate(row_num = row_number()) %>% filter(height == 0) %>% dplyr::select(row_num, everything())
+```
+
+## Data Cleaning
+
+```{r data_cleaning}
+# 1) Remove height == 0 (clear anomalies)
+# 2) Convert character columns to factors (e.g., `sex`)
+abalone <- abalone %>% filter(height > 0)
+abalone <- abalone %>% mutate(across(where(is.character), as.factor))
+
+# Standardized boxplots across numeric variables to compare scales/outliers
+numeric_cols <- abalone %>%
+  dplyr::select(where(is.numeric)) %>%
+  mutate(across(everything(), scale)) %>%   
+  pivot_longer(everything(), names_to = "Variable", values_to = "Value")
+
+ggplot(numeric_cols, aes(x = Variable, y = Value)) +
+  geom_boxplot(fill = "#4ECDC4", color = "black", alpha = 0.6, outlier.color = "red") +
+  coord_flip() +
+  labs(title = "Standardized Boxplots of Numeric Variables",
+       subtitle = "All numeric variables scaled to mean = 0 and sd = 1",
+       x = NULL, y = "Standardized Value (z-score)")
+
+# Outcome distribution
+abalone %>% ggplot(aes(rings)) + geom_histogram(bins = 100) + labs(title = "Outcome: Rings")
+```
+
+## Outliers Detection
+
+```{r outliers}
+# Example: display top-2 largest `height` as extreme values (demo only; not the final rule)
+outliers_info <- abalone %>% mutate(row_num = row_number()) %>% slice_max(height, n = 2)
+
+# Print outlier rows
+outliers_info %>% dplyr::select(row_num, everything())
+
+# Remove these two rows now
+abalone <- abalone %>% slice(-outliers_info$row_num)
+```
+
+## Correlation Analysis
+
+```{r correlation}
+# Pair plot colored by `sex`
+my_bin <- function(data, mapping, ..., low = "#132B43", high = "#56B1F7") {
+  ggplot(data = data, mapping = mapping) +
+    geom_bin2d(...) +
+    scale_fill_gradient(low = low, high = high)
+}
+
+abalone %>% dplyr::select(where(is.numeric), sex) %>% 
+  GGally::ggpairs(mapping = aes(color = sex),
+    upper = list(continuous = GGally::wrap("cor", size = 3)),
+    lower = list(combo = GGally::wrap("facethist", binwidth = 1),
+      continuous = GGally::wrap("points", size = 0.3, alpha = 0.6)))
+
+# Correlation heatmap for numeric variables
+corr_long <- melt(cor(abalone[sapply(abalone, is.numeric)], use = "complete.obs"),
+  varnames = c("Var1", "Var2")) %>% rename(r = value)
+
+ggplot(corr_long, aes(Var1, Var2, fill = r)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", r)), size = 2.8) +
+  scale_fill_gradient2(low="#4575b4", mid="white", high="#d73027",
+                       midpoint=0, limits=c(-1,1), name="Pearson r") +
+  coord_fixed() +
+  labs(title="Correlation Heatmap of Abalone Numeric Variables",
+       subtitle="Pearson correlation coefficients", x="Variable", y="Variable")
+```
+
+```{r}
+# Regroup the `sex` data
+abalone$sex <- ifelse(abalone$sex %in% c("F", "M"), "adult", "other")
+abalone$sex <- factor(abalone$sex, levels = c("adult", "other"))
+```
+
+```{r diff_rings}
+# Bin `rings` into groups and compare the distribution of each numeric variable across groups
+abalone2 <- abalone %>%
+  mutate(Rings_grp = cut(rings, breaks = c(1,7,9,10,12,29), include.lowest = TRUE)) %>%
+  pivot_longer(cols = where(is.numeric) & !matches("rings"), 
+               names_to = "Variable", values_to = "Value")
+
+# Overlaid histograms by ring group
+ggplot(abalone2, aes(Value, fill = Rings_grp)) +
+  geom_histogram(position = "identity", alpha = .5, bins = 60) +
+  facet_wrap(~Variable, scales = "free", ncol = 3) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(title = "Numeric Feature Univariate Distributions",
+       x = "Value", y = "Count", fill = "Rings") +
+  theme(legend.position = "right",
+        strip.text = element_text(face = "bold", size = 11),
+        plot.title = element_text(face = "bold", size = 14))
+
+# Q-Q plots for normality check within each ring group
+ggplot(abalone2, aes(sample = Value, color = Rings_grp)) +
+  stat_qq(size = .8, alpha = .7) +
+  stat_qq_line() +
+  facet_wrap(~Variable, scales = "free", ncol = 3) +
+  scale_color_brewer(palette = "Set2") +
+  labs(title = "Numeric Feature Q-Q Distributions",
+       x = "Theoretical Quantiles", y = "Sample Quantiles", color = "Rings") +
+  theme(legend.position = "right",
+        strip.text = element_text(face = "bold", size = 11),
+        plot.title = element_text(face = "bold", size = 14))
+```
+
+# Modeling
+
+## Data Split
+
+```{r initial_model}
+set.seed(123)  # reproducibility
+# Stratified split: 80% train / 20% test based on `rings`
+train_index <- createDataPartition(y = abalone$rings, p = 0.8, list = FALSE)
+train_set <- abalone[train_index, ]
+test_set  <- abalone[-train_index, ]
+
+# Baseline model on original scale (to inspect residual issues)
+fit1 <- lm(rings ~ ., data = train_set)
+summary(fit1)
+par(mfrow = c(2,2))
+plot(fit1, main = "")
+par(mfrow = c(1,1))
+mtext("Model 1: Residual Diagnostics", side = 3, line = -2, outer = TRUE, cex = 1.4)
+
+# Box-Cox to suggest a response transformation (often log)
+bcr <- MASS::boxcox(fit1, xlab = "Lambda", ylab = "Log-Likelihood")
+title("Box-Cox Transformation for Model 1")
+lambda <- bcr$x[which.max(bcr$y)]
+# Store lambda only; do not print it
+```
+
+## Log-Transformed Model
+
+```{r log_model}
+# Fit linear model on log-transformed response to address skewness/heteroscedasticity
+fit2 <- lm(log(rings) ~ ., data = train_set)
+summary(fit2)
+par(mfrow = c(2,2))
+plot(fit2, main = "")
+mtext("Model 2: Residual Diagnostics", side = 3, line = -2, outer = TRUE, cex = 1.4)
+
+# === Influence diagnostics (Cook's D / studentized residual / leverage) ===
+c <- cooks.distance(fit2); s <- rstudent(fit2); h <- hatvalues(fit2)
+ct <- 0.02
+st <- 3
+ht <- 15*length(coef(fit2))/nrow(model.matrix(fit2))
+
+ic <- which(c>ct); is <- which(abs(s)>st); ih <- which(h>ht); il <- which(c>ct|h>ht)
+ic <- head(ic[order(-c[ic])],10); is <- head(is[order(-abs(s[is]))],10)
+ih <- head(ih[order(-h[ih])],10); il <- head(il[order(-c[il])],10)
+cex <- .8; par(mfrow=c(2,2))
+plot(c,type="h",ylim=c(0,max(c,ct)*1.3),main="Cook's D (fit2)"); abline(h=ct,col="red",lty=2)
+text(ic,c[ic]*1.05,labels=ic,cex=cex,col="blue")
+
+ylim_s <- range(s)*1.1; plot(s,type="h",ylim=ylim_s,main="Studentized Residuals")
+abline(h=c(-st,st),col="red",lty=2)
+text(is,s[is]+0.2*sign(s[is]),labels=is,cex=cex,col="blue")
+
+plot(h,c,xlim=c(0,max(h,ht)*1.1),ylim=c(0,max(c,ct)*1.3),
+     main="Cook's D vs Leverage (fit2)",xlab="Leverage",ylab="Cook's D")
+abline(h=ct,v=ht,col=c("red","blue"),lty=2)
+text(h[il],c[il]*1.05,labels=il,cex=cex,col="darkgreen")
+
+plot(h,ylim=c(0,max(h,ht)*1.1),main="Leverage Values (fit2)",ylab="Hat Values ")
+abline(h=ht,col="red",lty=2); text(ih,h[ih]*1.05,labels=ih,cex=cex,col="blue")
+```
+
+## Remove Influential Points
+
+```{r remove_influential}
+# Combine multiple rules to flag "suspects" in TRAINING SET ONLY (avoid test leakage), then refit
+outlier_idx <- which(cooks.distance(fit2) > 0.02 |
+  abs(rstudent(fit2)) > 3 |
+  abs(rstandard(fit2)) > 3 |
+  hatvalues(fit2) > 15 * length(coef(fit2)) / nrow(model.matrix(fit2)))
+
+outliers_info <- train_set %>%
+  mutate(row_num = row_number()) %>%
+  slice(outlier_idx) %>%
+  dplyr::select(row_num, everything())
+
+# Print removed training samples
+outliers_info
+
+train_set <- train_set %>% slice(-outlier_idx)
+
+# Refit after removing influential points
+fit3 <- lm(log(rings) ~ ., data = train_set)
+summary(fit3)
+par(mfrow = c(2,2))
+plot(fit3, main = "")
+mtext("Model 3: Residual Diagnostics", side = 3, line = -2, outer = TRUE, cex = 1.4)
+```
+
+## Variable Transformations
+
+```{r transformations}
+# Inspect shapes between predictors and log(rings) to motivate transforms (log/sqrt/raw)
+abalone_long <- train_set %>% dplyr::select(rings, height, weight.sh, weight.s, diameter, weight.w, weight.v, length) %>%
+  mutate(rings_log = log(rings)) %>%
+  pivot_longer(cols = c(height, weight.sh, weight.s, diameter, weight.w, weight.v, length), names_to = "predictor", values_to = "value")
+
+ggplot(abalone_long, aes(x = value, y = rings_log)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "loess", color = "blue") +
+  facet_wrap(~ predictor, scales = "free_x") +
+  labs(y = "log(rings)", title = "Smoothed relationships for log(rings)")
+
+# Create transformed variants of predictors for stepwise search later
+abalone_trans <- train_set %>% mutate(rings_log = log(rings)) %>%
+  mutate(across(c(height, weight.sh, weight.s, diameter, weight.v, weight.w, length), list(log = ~log(.), sqrt = ~sqrt(.), linear = ~(.)), .names = "{.fn}_{.col}"))
+
+# Visualize how log/sqrt/raw differ in association with log(rings)
+abalone_long_trans <- train_set %>%
+  mutate(rings_log = log(rings)) %>%
+  pivot_longer(c(height, weight.sh, weight.s, diameter, weight.w, weight.v, length),
+               names_to = "predictor", values_to = "value") %>%
+  mutate(log = log(value), sqrt = sqrt(value), linear = value) %>%
+  pivot_longer(c(log, sqrt, linear), names_to = "transform", values_to = "x_value")
+
+ggplot(abalone_long_trans, aes(x = x_value, y = rings_log)) +
+  geom_point(alpha = 0.2, size = 0.4) +
+  geom_smooth(method = "loess", color = "blue", se = FALSE, linewidth = 0.6) +
+  facet_wrap(~ predictor + transform, scales = "free_x", ncol = 7) +
+  labs(x = NULL, y = "log(rings)",
+       title = "Smoothed relationships for log(rings) across transformations")
+```
+
+## Model 4
+
+```{r model4}
+# Strategy: define a rich "upper" model (raw + transformed terms + sex),
+# then run stepwise (both) from the null to get a compact candidate (fit4).
+none_mod <- lm(log(rings) ~ 1, data = train_set)
+fit4 <- lm(log(rings) ~ log(height) + sqrt(height) + log(weight.sh) + 
+           log(weight.s) + log(diameter) + log(weight.w) + sqrt(diameter) +
+           log(weight.v) + sqrt(weight.v) + log(length) + sqrt(length) +
+           height + weight.sh + weight.s + diameter + weight.w + length + sex +
+           weight.v, data = train_set)
+
+fit4 <- step(none_mod, scope = list(lower = formula(none_mod),
+                                    upper = formula(fit4)),
+             direction = "both", trace = 0)
+summary(fit4)
+par(mfrow = c(2,2))
+plot(fit4, main = "")
+mtext("Model 4: Residual Diagnostics", side = 3, line = -2, outer = TRUE, cex = 1.4)
+
+# Influence visuals to sanity-check the selected model
+c <- cooks.distance(fit4); s <- rstudent(fit4); h <- hatvalues(fit4)
+ct <- 0.02; st <- 3; ht <- 15*length(coef(fit4))/nrow(model.matrix(fit4))
+ic <- which(c>ct); is <- which(abs(s)>st); ih <- which(h>ht); il <- which(c>ct|h>ht)
+ic <- head(ic[order(-c[ic])],10); is <- head(is[order(-abs(s[is]))],10)
+ih <- head(ih[order(-h[ih])],10); il <- head(il[order(-c[il])],10)
+cex <- .8; par(mfrow=c(2,2))
+plot(c,type="h",ylim=c(0,max(c,ct)*1.1),main="Cook's D (fit4)"); abline(h=ct,col="red",lty=2)
+text(ic,c[ic]*1.2,labels=ic,cex=cex,col="blue")
+plot(s,type="h",ylim=range(s)*1.2,main="Studentized Residuals (fit4)")
+abline(h=c(-st,st),col="red",lty=2)
+text(is,s[is]+0.2*sign(s[is]),labels=is,cex=cex,col="blue")
+plot(h,c,xlim=c(0,max(h,ht)*1.1),ylim=c(0,max(c,ct)*1.1),
+     main="Cook's D vs Leverage (fit4)",xlab="Leverage",ylab="Cook's D")
+abline(h=ct,v=ht,col=c("red","blue"),lty=2)
+text(h[il],c[il]*1.6,labels=il,cex=cex,col="darkgreen")
+plot(h,ylim=c(0,max(h,ht)*1.1),main="Leverage Values (fit4)",ylab="Hat Values")
+abline(h=ht,col="red",lty=2); text(ih,h[ih]*1.2,labels=ih,cex=cex,col="blue")
+```
+
+## Influential Points (fit4)
+
+```{r influential_points_fit4}
+# Remove fit4's influential training points and refit (fit5) for a more robust base
+outlier_idx <- which(cooks.distance(fit4) > 0.02 |
+  abs(rstudent(fit4)) > 3 |
+  abs(rstandard(fit4)) > 3 |
+  hatvalues(fit4) > 15 * length(coef(fit4)) / nrow(model.matrix(fit4)))
+
+outliers_info <- train_set %>%
+  mutate(row_num = row_number()) %>%
+  slice(outlier_idx) %>%
+  dplyr::select(row_num, everything())
+
+# Print removed samples (fit4)
+outliers_info
+
+train_set <- train_set %>% slice(-outlier_idx)
+
+none_mod <- lm(log(rings) ~ 1, data = train_set)
+fit5 <- lm(log(rings) ~ log(height) + sqrt(height) + log(weight.sh) + 
+           log(weight.s) + log(diameter) + log(weight.w) + sqrt(diameter) +
+           log(weight.v) + sqrt(weight.v) + log(length) + sqrt(length) +
+           height + weight.sh + weight.s + diameter + weight.w + length + sex +
+           weight.v, data = train_set)
+
+fit5 <- step(none_mod, scope = list(lower = formula(none_mod),
+                                    upper = formula(fit5)),
+             direction = "both", trace = 0)
+summary(fit5)
+par(mfrow = c(2,2))
+plot(fit5, main = "")
+mtext("Model 5: Residual Diagnostics", side = 3, line = -2, outer = TRUE, cex = 1.4)
+```
+
+## Model 6
+
+```{r Model6}
+# Consider richer interactions.
+none_mod <- lm(log(rings) ~ 1, data = train_set)
+fit6 <- update(fit5, . ~ .^2, data = train_set)
+fit6 <- step(fit5,
+             scope = list(lower = formula(none_mod),
+                          upper = formula(fit6)),
+             direction = "both",
+             trace = 0)
+summary(fit6)
+par(mfrow = c(2,2))
+plot(fit6, main = "")
+mtext("Model 6: Residual Diagnostics", side = 3, line = -2, outer = TRUE, cex = 1.4)
+
+# Influence check again
+c <- cooks.distance(fit6); s <- rstudent(fit6); h <- hatvalues(fit6)
+ct <- 0.02; st <- 3; ht <- 15*length(coef(fit6))/nrow(model.matrix(fit6))
+ic <- which(c>ct); is <- which(abs(s)>st); ih <- which(h>ht); il <- which(c>ct|h>ht)
+ic <- head(ic[order(-c[ic])],10); is <- head(is[order(-abs(s[is]))],10)
+ih <- head(ih[order(-h[ih])],10); il <- head(il[order(-c[il])],10)
+cex <- .8; par(mfrow=c(2,2))
+plot(c,type="h",ylim=c(0,max(c,ct)*1.1),main="Cook's D (fit6)"); abline(h=ct,col="red",lty=2)
+text(ic,c[ic]*1.05,labels=ic,cex=cex,col="blue")
+plot(s,type="h",ylim=range(s)*1.1,main="Studentized Residuals (fit6)")
+abline(h=c(-st,st),col="red",lty=2)
+text(is,s[is]+0.2*sign(s[is]),labels=is,cex=cex,col="blue")
+plot(h,c,xlim=c(0,max(h,ht)*1.1),ylim=c(0,max(c,ct)*1.3),
+     main="Cook's D vs Leverage (fit6)",xlab="Leverage",ylab="Cook's D")
+abline(h=ct,v=ht,col=c("red","blue"),lty=2)
+text(h[il],c[il]*1.05,labels=il,cex=cex,col="darkgreen")
+plot(h,ylim=c(0,max(h,ht)*1.1),main="Leverage Values (fit6)",ylab="Hat Values")
+abline(h=ht,col="red",lty=2); text(ih,h[ih]*1.05,labels=ih,cex=cex,col="blue")
+```
+
+## Influential Points (fit6) → Model 7
+
+```{r ip}
+# Clean again based on fit6, then fit a more conservative model with up to 2-way interactions (fit7)
+outlier_idx <- which(cooks.distance(fit6) > 0.02 |
+  abs(rstudent(fit6)) > 3 |
+  abs(rstandard(fit6)) > 3 |
+  hatvalues(fit6) > 15 * length(coef(fit6)) / nrow(model.matrix(fit6)))
+
+outliers_info <- train_set %>%
+  mutate(row_num = row_number()) %>%
+  slice(outlier_idx) %>%
+  dplyr::select(row_num, everything())
+
+# Print removed samples (fit6)
+outliers_info
+
+train_set <- train_set %>% slice(-outlier_idx)
+
+none_mod <- lm(log(rings) ~ 1, data = train_set)
+# Up to 2-way interactions (far fewer terms than .^3)
+fit7 <- update(fit5, . ~ .^2, data = train_set)
+fit7 <- step(fit7, scope = list(lower = formula(none_mod),
+                                upper = formula(fit7)),
+             direction = "both", trace = 0)
+summary(fit7)
+par(mfrow = c(2,2))
+plot(fit7, main = "")
+mtext("Model 7: Residual Diagnostics", side = 3, line = -2, outer = TRUE, cex = 1.4)
+par(mfrow = c(1,1))
+```
+
+## LASSO Regression
+
+```{r lasso}
+# Use LASSO to perform selection/shrinkage under multi-collinearity and high dimensionality
+set.seed(123)
+# Build design matrix based on fit7 formula (drop intercept column)
+X <- model.matrix(formula(fit7), data = train_set)[, -1]
+y <- log(train_set$rings)
+# 25-fold CV to choose lambda
+lasso_fit8 <- cv.glmnet(X, y, alpha = 1, nfolds = 25)
+
+# Coefficient paths across log(lambda)
+coef_df <- broom::tidy(lasso_fit8$glmnet.fit) %>% dplyr::filter(term != "(Intercept)")
+
+ggplot(coef_df, aes(log(lambda), estimate, group = term, color = term)) +
+  geom_line(alpha = .8) +
+  geom_vline(xintercept = log(lasso_fit8$lambda.min), col = "blue", lty = 2) +
+  geom_vline(xintercept = log(lasso_fit8$lambda.1se), col = "red", lty = 2) +
+  annotate("text", x = log(lasso_fit8$lambda.min),
+           y = max(coef_df$estimate, na.rm = TRUE)*.9,
+           label = paste0("λ[min] = ", signif(lasso_fit8$lambda.min, 3)),
+           col = "blue", hjust = -0.1, size = 4) +
+  annotate("text", x = log(lasso_fit8$lambda.1se),
+           y = max(coef_df$estimate, na.rm = TRUE)*.8,
+           label = paste0("λ[1se] = ", signif(lasso_fit8$lambda.1se, 3)),
+           col = "red", hjust = -0.1, size = 4) +
+  labs(title = "LASSO Coefficient Paths", x = "log(lambda)", y = "Coefficient") +
+  theme_minimal(base_size = 13) + theme(legend.position = "none")
+
+# CV curve
+cv_df <- data.frame(lambda = lasso_fit8$lambda, mse = lasso_fit8$cvm, sd = lasso_fit8$cvsd)
+
+ggplot(cv_df, aes(log(lambda), mse)) +
+  geom_line(col = "gray40") +
+  geom_point(col = "firebrick", size = 2) +
+  geom_errorbar(aes(ymin = mse - sd, ymax = mse + sd), width = .05, col = "gray70") +
+  geom_vline(xintercept = log(lasso_fit8$lambda.min), col = "blue", lty = 2) +
+  geom_vline(xintercept = log(lasso_fit8$lambda.1se), col = "red", lty = 2) +
+  annotate("text", x = log(lasso_fit8$lambda.min), y = min(cv_df$mse)*1.25,
+           label = paste0("λ[min] = ", signif(lasso_fit8$lambda.min, 3)),
+           col = "blue", size = 4, hjust = -0.1) +
+  annotate("text", x = log(lasso_fit8$lambda.1se), y = min(cv_df$mse)*1.35,
+           label = paste0("λ[1se] = ", signif(lasso_fit8$lambda.1se, 3)),
+           col = "red", size = 4, hjust = -0.1) +
+  labs(title = "Cross-Validation for LASSO (MSE vs log(λ))",
+       x = "log(lambda)", y = "Mean Squared Error (CV)") +
+  theme_minimal(base_size = 13)
+
+# Table of non-zero coefficients under lambda.min and lambda.1se
+lasso_table <- data.frame(
+  variable = rownames(coef(lasso_fit8, s = "lambda.min")),
+  coef_min = round(as.vector(coef(lasso_fit8, s = "lambda.min")), 4),
+  coef_1se = round(as.vector(coef(lasso_fit8, s = "lambda.1se")), 4)
+) %>%
+  dplyr::filter(coef_min != 0 | coef_1se != 0) %>%
+  arrange(desc(abs(coef_1se)))
+
+lasso_table
+```
+
+## Reduced Model
+
+```{r reduced_model}
+# Build a reduced GLM on log-scale using key interactions suggested by LASSO/stepwise
+fit8 <- lm(log(rings) ~ height + log(weight.s):sqrt(length) +
+                        log(weight.sh):sqrt(weight.v) +
+                        sex:weight.sh + log(weight.s):sex, data = train_set)
+summary(fit8)
+vif(fit8)
+par(mfrow = c(2,2))
+plot(fit8, main = "")
+mtext("Model 8: Residual Diagnostics", side = 3, line = -2, outer = TRUE, cex = 1.4)
+
+car::avPlots(fit8)
+```
+
+# Model Comparison
+
+```{r model_comparison}
+# Compare candidate models on the log scale using common metrics
+models <- list(fit2, fit3, fit4, fit5, fit6, fit7, fit8)
+
+results <- models %>%
+  set_names(paste0("fit", 1:length(models))) %>%
+  map_dfr(function(mod) {
+    s <- summary(mod)
+    n <- nobs(mod)
+    p <- length(coef(mod))
+    PRESS <- sum((resid(mod) / (1 - hatvalues(mod)))^2)
+    train_mse <- mean(resid(mod)^2)
+    ll <- as.numeric(logLik(mod))
+    AvgLL <- ll / n
+    MSPE <- PRESS / n
+    gap <- MSPE - train_mse
+    AIC_per_n <- AIC(mod) / n
+    BIC_per_n <- BIC(mod) / n
+    
+    tibble(Loglik_n = AvgLL,
+      AIC_n = AIC_per_n,
+      BIC_n = BIC_per_n,
+      MSPE = MSPE,
+      Train_MSE = train_mse,
+      Gap = gap)
+  }, .id = "Model")
+
+# Print model comparison on log scale
+results
+```
+
+# Evaluation on Original Scale
+
+```{r final_evaluation}
+# Use Duan's smearing to back-transform predictions from log-scale to original scale
+actual <- test_set$rings
+models <- list(fit2, fit3, fit4, fit5, fit6, fit7, fit8)
+names(models) <- paste0("Model", 2:8)
+
+# Smearing factor = mean(exp(residual)) on log model
+smearing_factors <- map_dbl(models, ~ mean(exp(residuals(.x))))
+
+safe_backtransform <- function(model, smear, newdata, upper_q = 0.99) {
+  pred_log <- predict(model, newdata = newdata)
+  cutoff <- quantile(pred_log, upper_q)
+  pred_log <- pmin(pred_log, cutoff)
+  exp(pred_log) * smear
+}
+
+predictions <- map2(models, smearing_factors, ~ safe_backtransform(.x, .y, newdata = test_set))
+
+evaluate_model <- function(pred, actual) {
+  res <- pred - actual
+  tibble(MSE = mean(res^2),
+    RMSE = sqrt(mean(res^2)),
+    MAE = mean(abs(res)),
+    MAPE = mean(abs(res)/actual)*100,
+    R2 = 1 - sum(res^2) / sum((actual - mean(actual))^2))
+}
+
+results2 <- imap_dfr(predictions, ~ evaluate_model(.x, actual) %>% mutate(Model = .y, .before = 1))
+
+final_results <- bind_rows(tibble(Model = "Model1", evaluate_model(predict(fit1, newdata = test_set), actual)),
+  results2)
+final_results
+```
+
+## Residual Hist
+
+```{r residual_hist}
+# Visual diagnostics: standardized residual distribution for each model
+models <- list(fit1=fit1, fit2=fit2, fit3=fit3, fit4=fit4, fit5=fit5, fit6=fit6, fit7=fit7, fit8=fit8)
+
+make_hist_plot <- function(m, name) {
+  rstd <- rstandard(m) %>% na.omit()
+  sk <- moments::skewness(rstd)
+  kt <- moments::kurtosis(rstd)
+  lbl <- sprintf("Skew = %.2f\nKurt = %.2f", sk, kt)
+
+  ggplot(tibble(res = rstd), aes(x = res)) +
+    geom_histogram(aes(y = ..density..), bins = 30, fill = "#4ECDC4", color = "black", alpha = 0.7) +
+    geom_density(color = "red", linewidth = 1) +
+    geom_vline(xintercept = 0, linetype = "dashed") +
+    annotate("text",x = max(rstd) * 0.2, y = max(density(rstd)$y) * 0.9, label = lbl, hjust = 0, vjust = 1, size = 2.6, color = "black") +
+    labs(x = name)
+}
+wrap_plots(imap(models, make_hist_plot), ncol = 4) +
+  plot_annotation(
+    title = "Residual Distributions with Skewness and Kurtosis",
+    subtitle = "Histogram and density of standardized residuals for eight models")
+```
+
+# Prediction Analysis
+
+```{r PA}
+# Build a combined data frame of predictions and compare distributions & residuals
+pred_all <- c(list(Model1 = predict(fit1, newdata = test_set)),
+              predictions[paste0("Model", 2:8)])
+comparison <- tibble(Actual = actual,
+                     !!!rev(setNames(pred_all, paste0("Pred", 1:8))))
+
+# Density comparison for a few representative models vs Actual
+comparison %>%
+  dplyr::select(Actual, Pred1, Pred5, Pred7) %>%
+  pivot_longer(everything(), names_to = "Type", values_to = "Value") %>%
+  ggplot(aes(x = Value, fill = Type)) +
+  geom_density(alpha = 0.45, color = "black", linewidth = 0.4) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Distribution: Actual vs Selected Models",
+       x = "Value", y = "Density") 
+
+# Residual boxplots across Models 1–8
+comparison %>%
+  mutate(across(starts_with("Pred"), ~ .x - Actual,
+                .names = "Resid{substr(col,5,5)}")) %>%
+  dplyr::select(starts_with("Resid")) %>%
+  pivot_longer(everything(), names_to = "Model", values_to = "Residual") %>%
+  ggplot(aes(x = Model, y = Residual, fill = Model)) +
+  geom_boxplot(alpha = 0.6, outlier.color = "gray40") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  scale_fill_brewer(palette = "Set1") +
+  labs(title = "Residual Boxplot: Models 1–8",
+       x = NULL, y = "Residual (Predicted − Actual)") 
+
+# Actual vs Predicted scatter by model
+comparison %>%
+  pivot_longer(starts_with("Pred"), names_to = "Model", values_to = "Predicted") %>%
+  ggplot(aes(Actual, Predicted)) +
+  geom_point(alpha = .6, size = 1.5, color = "#2E86DE") +
+  geom_abline(slope = 1, intercept = 0, lty = 2, color = "gray40") +
+  facet_wrap(~ Model, ncol = 4) +
+  labs(title = "Actual vs Predicted (Models 1–8)",
+       x = "Actual", y = "Predicted") 
+```
