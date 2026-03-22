@@ -1,9 +1,7 @@
-# 📌 Abalone Age Prediction — Statistical Modeling Project (Instructed by Professor Jie Peng)
+# 📌 Abalone Age Prediction — Statistical Modeling Project
 
 This repository explores statistical modeling techniques for predicting the **age of abalone** using physical measurements from the UCI Abalone dataset.
-We investigate multiple modeling strategies to address **nonlinear relationships**, **influential points**, **multicollinearity**, and the trade-off between **predictive performance**, **model robustness**, and **interpretability**.
-
-The analysis is implemented in **R**, combining classical statistical theory with modern feature selection and model diagnostics.
+We investigate multiple modeling strategies to address **nonlinear relationships**, **influential points**, **multicollinearity**, and the trade-off between **predictive performance**, **model robustness**, and **interpretability**. The project received a raw score of **19/20**.
 
 ---
 
