@@ -1,11 +1,11 @@
-# 📌 Abalone Age Prediction — Statistical Modeling Project
+# Abalone Age Prediction — Statistical Modeling Project
 
 This repository explores statistical modeling techniques for predicting the **age of abalone** using physical measurements from the UCI Abalone dataset.
 We investigate multiple modeling strategies to address **nonlinear relationships**, **influential points**, **multicollinearity**, and the trade-off between **predictive performance**, **model robustness**, and **interpretability**. The project received a raw score of **19/20**.
 
 ---
 
-## 🔍 Background & Motivation
+## Background & Motivation
 
 The age of an abalone is determined by counting **rings inside its shell**.
 Unlike tree rings, abalone rings are not visible externally and can only be observed **after cutting or grinding the shell**, which is destructive and costly.
@@ -21,7 +21,7 @@ By using **shell dimensions and weight measurements**, we build statistical mode
 
 ---
 
-## 📊 Data Description
+## Data Description
 
 **Source:** UCI Machine Learning Repository
 [https://archive.ics.uci.edu/ml/datasets/Abalone](https://archive.ics.uci.edu/ml/datasets/Abalone)
@@ -43,7 +43,7 @@ By using **shell dimensions and weight measurements**, we build statistical mode
 
 ---
 
-# 🧪 Research Questions
+# Research Questions
 
 We study several key methodological questions:
 
@@ -67,7 +67,7 @@ We study several key methodological questions:
 
 ---
 
-# 🛠️ Analysis Workflow
+# Analysis Workflow
 
 We fit a sequence of models from simple OLS to complex interaction structures, followed by LASSO reduction.
 The progression is:
@@ -85,7 +85,7 @@ The progression is:
 
 ---
 
-# 🔍 Exploratory Data Analysis
+# Exploratory Data Analysis
 
 * No missing values
 * Many predictors are **strongly right-skewed**
@@ -101,7 +101,7 @@ Two zero-height values are removed.
 
 ---
 
-# 🧭 Model Selection Principles
+# Model Selection Principles
 
 ### Normalized Information Criteria
 
@@ -118,7 +118,7 @@ This follows statistical learning theory: smaller gap → better robustness.
 
 ---
 
-# 📈 Model Comparison (Training)
+# Model Comparison (Training)
 
 | Model    | Avg LL     | AIC/n      | BIC/n      | MSPE       | Train MSE  | Gap         |
 | -------- | ---------- | ---------- | ---------- | ---------- | ---------- | ----------- |
@@ -135,7 +135,7 @@ This follows statistical learning theory: smaller gap → better robustness.
 
 ---
 
-# 🎯 Final Model Evaluation (Test Set)
+# Final Model Evaluation (Test Set)
 
 Back-transformation uses **Duan’s smearing estimator** to correct bias from log-scale predictions
 
@@ -153,7 +153,7 @@ To avoid extreme predictions, log(y) is truncated at the **99th percentile**.
 * **fit8** reach a balance between robustness and fitting, predictive performance
 
 
-# 🏁 Conclusion
+# Conclusion
 
 1. **Transformations matter:**
    Box–Cox/log improves residual shape and linearity.
